@@ -3,12 +3,13 @@ name: Toyoko Monitor
 on:
   workflow_dispatch:
   schedule:
-    # GitHub cron uses UTC. China time: hourly at :17 from 06:17 through 23:17.
-    # Quiet hours: 00:00-05:59 China time (UTC+8).
-    - cron: "17 0-15 * * *"
-    - cron: "17 22-23 * * *"
+    # China time: hourly at :17 from 06:17 through 23:17.
+    # Quiet hours: 00:00-05:59.
+    - cron: "17 6-23 * * *"
+      timezone: "Asia/Shanghai"
     # TEMPORARY: verify that GitHub has registered the schedule trigger.
     - cron: "*/5 * * * *"
+      timezone: "Asia/Shanghai"
 
 permissions:
   contents: read
