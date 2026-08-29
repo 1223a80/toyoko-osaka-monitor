@@ -2,6 +2,10 @@ name: Toyoko Monitor
 
 on:
   workflow_dispatch:
+  # TEMPORARY: wake schedule registration in this newly created repository.
+  push:
+    branches:
+      - main
   schedule:
     # China time: hourly at :17 from 06:17 through 23:17.
     # Quiet hours: 00:00-05:59.
