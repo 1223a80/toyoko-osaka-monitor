@@ -107,7 +107,7 @@ Resources:
       ScheduleExpression: cron(17,47 * * * ? *)
       ScheduleExpressionTimezone: Asia/Shanghai
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: "OFF"
       Target:
         Arn: !GetAtt MonitorFunction.Arn
         RoleArn: !GetAtt SchedulerInvokeRole.Arn
