@@ -1,6 +1,7 @@
 # 东横 INN 大阪空房监控
 
-这是一个只读的酒店空房监控程序。它固定查询：
+这是一个只读的酒店空房监控程序。它既可由 GitHub Actions 运行，也可迁移到
+AWS Lambda + EventBridge Scheduler + SNS。它固定查询：
 
 - 入住：2026-10-30
 - 退房：2026-11-01
@@ -9,6 +10,29 @@
 - 所有房型，并在发现候选空房时进一步确认是否有吸烟房
 - 将朋友入住的东横 INN 大阪本町2号店（`00266`）标为最高优先
 - 中国时间 06:17 至 23:47 每 30 分钟检查一次，00:00 至 05:59 不查询
+
+AWS 方案按后续决定全天每 30 分钟（每小时 `:17`、`:47`）查询，不设凌晨静默；
+手机勿扰模式负责夜间不打扰。GitHub Actions 方案仍保留原有静默保护，直到 AWS
+部署验证成功后再停用，避免迁移期间出现监控空档。
+
+## AWS 云端方案
+
+AWS 版使用东京区域 `ap-northeast-1`：
+
+1. EventBridge Scheduler 每小时的 `:17`、`:47` 触发 Lambda。
+2. Lambda 调用相同的东横 INN 只读接口，并把每次结果写入 CloudWatch Logs。
+3. 全部满房时不发邮件。
+4. 有空房或任何酒店状态为 `UNKNOWN` 时，通过 SNS 发邮件。
+5. 日本时间 2026-10-30 00:00 起，Lambda 不再访问酒店接口。
+
+基础设施模板位于 `aws/cloudformation.yaml`，CloudShell 部署脚本位于
+`aws/deploy-from-cloudshell.sh`。部署会创建一个小型 S3 制品桶、Lambda、14 天日志
+保留、SNS 主题和订阅，以及 Scheduler 和最小必要 IAM 角色。SNS 第一次会发送一封
+确认邮件，收件人必须点击 **Confirm subscription** 后才会收到监控邮件。
+
+`aws/build-lambda-package.sh` 使用清华 PyPI 镜像，并明确为 Lambda Python 3.12
+Linux ARM64 构建依赖，避免把 Mac 的二进制扩展误打进部署包。生成的 ZIP 是本地部署
+制品，已由 `.gitignore` 排除，不提交到 GitHub。
 
 程序不登录、不锁房、不预订，也不会修改酒店库存。真正预订仍然需要你自己打开东横 INN 官网完成。
 

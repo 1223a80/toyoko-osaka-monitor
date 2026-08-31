@@ -7,3 +7,4 @@ venv/
 work/
 *.har
 www.toyoko-inn.com.har
+aws/*.zip

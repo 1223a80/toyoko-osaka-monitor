@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Toyoko Inn Osaka availability monitor (Lambda, Scheduler, SNS)
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+  ArtifactKey:
+    Type: String
+  NotificationEmail:
+    Type: String
+    Description: Email address that receives vacancy and failure alerts
+
+Resources:
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Toyoko Osaka Monitor
+      TopicName: toyoko-osaka-monitor-alerts
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref NotificationEmail
+      Protocol: email
+      TopicArn: !Ref NotificationTopic
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: WriteLogsAndPublishMonitorAlerts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "${MonitorLogGroup.Arn}:*"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref NotificationTopic
+
+  MonitorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: toyoko-osaka-monitor
+      Description: Read-only Toyoko Inn Osaka vacancy monitor
+      Runtime: python3.12
+      Handler: lambda_handler.lambda_handler
+      Architectures:
+        - arm64
+      MemorySize: 256
+      Timeout: 90
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+
+  MonitorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/toyoko-osaka-monitor
+      RetentionInDays: 14
+
+  SchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeToyokoMonitor
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt MonitorFunction.Arn
+
+  MonitorSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: toyoko-osaka-monitor-every-30-minutes
+      Description: Run at :17 and :47 every hour, China time
+      State: ENABLED
+      ScheduleExpression: cron(17,47 * * * ? *)
+      ScheduleExpressionTimezone: Asia/Shanghai
+      FlexibleTimeWindow:
+        Mode: OFF
+      Target:
+        Arn: !GetAtt MonitorFunction.Arn
+        RoleArn: !GetAtt SchedulerInvokeRole.Arn
+        Input: "{}"
+        RetryPolicy:
+          MaximumRetryAttempts: 0
+
+Outputs:
+  FunctionName:
+    Value: !Ref MonitorFunction
+  ScheduleName:
+    Value: !Ref MonitorSchedule
+  TopicArn:
+    Value: !Ref NotificationTopic
