@@ -33,6 +33,8 @@ ROOMS = 1
 REQUEST_TIMEOUT = (8, 25)
 DEFAULT_CONFIRM_DELAY_SECONDS = 8.0
 ISSUE_TITLE = "东横 INN 大阪空房监控通知（请订阅）"
+PREFERRED_HOTEL_CODE = "00266"
+PREFERRED_HOTEL_LABEL = "🌟 朋友同店·最高优先"
 
 # Order and 10 + 10 + 10 + 3 batching are taken from the supplied Safari HAR.
 HOTEL_BATCHES = [
@@ -310,6 +312,34 @@ def smoking_description(code: str, smoking_results: dict[str, HotelResult]) -> s
     return "当前空房中未确认到吸烟房"
 
 
+def available_results_in_priority_order(
+    results: dict[str, HotelResult],
+) -> list[HotelResult]:
+    """Put the friend's hotel first while preserving the HAR order for all others."""
+    available_by_code = {
+        code: result
+        for code, result in results.items()
+        if result.status is Status.AVAILABLE
+    }
+    ordered_codes = [PREFERRED_HOTEL_CODE, *all_hotel_codes()]
+    return [
+        available_by_code.pop(code)
+        for code in ordered_codes
+        if code in available_by_code
+    ]
+
+
+def format_available_line(
+    result: HotelResult,
+    smoking_results: dict[str, HotelResult],
+) -> str:
+    return (
+        f"- **{HOTEL_NAMES[result.code]}**（`{result.code}`）— "
+        f"{smoking_description(result.code, smoking_results)}；"
+        f"最低价 {format_price(result.lowest_price)}"
+    )
+
+
 def print_results(
     results: dict[str, HotelResult], smoking_results: dict[str, HotelResult]
 ) -> None:
@@ -333,7 +363,7 @@ def build_summary(
     smoking_results: dict[str, HotelResult],
     now_shanghai: datetime,
 ) -> str:
-    available = [result for result in results.values() if result.status is Status.AVAILABLE]
+    available = available_results_in_priority_order(results)
     unavailable = [result for result in results.values() if result.status is Status.UNAVAILABLE]
     unknown = [result for result in results.values() if result.status is Status.UNKNOWN]
 
@@ -350,13 +380,26 @@ def build_summary(
         "",
     ]
     if available:
-        lines.extend(["## 当前有空房", ""])
-        for result in available:
-            lines.append(
-                f"- **{HOTEL_NAMES[result.code]}**（`{result.code}`）："
-                f"{smoking_description(result.code, smoking_results)}；"
-                f"最低价 {format_price(result.lowest_price)}"
+        preferred = next(
+            (result for result in available if result.code == PREFERRED_HOTEL_CODE),
+            None,
+        )
+        if preferred is not None:
+            lines.extend(
+                [
+                    f"## {PREFERRED_HOTEL_LABEL}",
+                    "",
+                    format_available_line(preferred, smoking_results),
+                    "",
+                ]
             )
+        other_available = [
+            result for result in available if result.code != PREFERRED_HOTEL_CODE
+        ]
+        if other_available:
+            lines.extend(["## 其他当前有空房", ""])
+            for result in other_available:
+                lines.append(format_available_line(result, smoking_results))
         lines.extend(["", f"[打开东横 INN 预订页面]({BOOKING_URL})", ""])
     elif not unknown:
         lines.extend(["## 结果：目前大阪府 33 家全部满房", ""])
@@ -494,7 +537,7 @@ def build_alert_message(
     smoking_results: dict[str, HotelResult],
     now_shanghai: datetime,
 ) -> str:
-    available = [result for result in results.values() if result.status is Status.AVAILABLE]
+    available = available_results_in_priority_order(results)
     unknown = [result for result in results.values() if result.status is Status.UNKNOWN]
     lines = [
         f"查询时间：{now_shanghai:%Y-%m-%d %H:%M:%S}（中国时间）  ",
@@ -503,13 +546,29 @@ def build_alert_message(
         "",
     ]
     if available:
-        lines.extend(["## 🚨 发现空房", ""])
-        for result in available:
-            lines.append(
-                f"- **{HOTEL_NAMES[result.code]}**（`{result.code}`）— "
-                f"{smoking_description(result.code, smoking_results)}；"
-                f"最低价 {format_price(result.lowest_price)}"
+        preferred = next(
+            (result for result in available if result.code == PREFERRED_HOTEL_CODE),
+            None,
+        )
+        if preferred is not None:
+            lines.extend(
+                [
+                    f"## {PREFERRED_HOTEL_LABEL}",
+                    "",
+                    "**大阪本町2号店有房，和朋友住同一家最方便。**",
+                    "",
+                    format_available_line(preferred, smoking_results),
+                    "",
+                ]
             )
+        other_available = [
+            result for result in available if result.code != PREFERRED_HOTEL_CODE
+        ]
+        if other_available:
+            heading = "## 🚨 其他空房" if preferred is not None else "## 🚨 发现空房"
+            lines.extend([heading, ""])
+            for result in other_available:
+                lines.append(format_available_line(result, smoking_results))
         lines.extend(["", f"[立即打开东横 INN 预订页面]({BOOKING_URL})", ""])
     if unknown:
         lines.extend(
@@ -532,6 +591,11 @@ def monitor_has_ended(now_japan: datetime) -> bool:
     return now_japan >= stop_at
 
 
+def is_quiet_hours(now_shanghai: datetime) -> bool:
+    """Block delayed scheduled runs from querying during China quiet hours."""
+    return 0 <= now_shanghai.hour < 6
+
+
 def main() -> int:
     now_japan = datetime.now(ZoneInfo("Asia/Tokyo"))
     now_shanghai = now_japan.astimezone(ZoneInfo("Asia/Shanghai"))
@@ -540,6 +604,15 @@ def main() -> int:
             "Monitoring period has ended.\n"
             "No API request was sent.\n"
             "请在 GitHub Actions 页面手动 Disable workflow，以停止后续空运行。"
+        )
+        print(message)
+        append_step_summary(f"# 东横 INN 大阪空房监控\n\n{message}\n")
+        return 0
+
+    if is_quiet_hours(now_shanghai):
+        message = (
+            f"Quiet hours: {now_shanghai:%Y-%m-%d %H:%M:%S} China time.\n"
+            "No Toyoko Inn API request was sent and no notification was created."
         )
         print(message)
         append_step_summary(f"# 东横 INN 大阪空房监控\n\n{message}\n")

@@ -80,12 +80,54 @@ class ToyokoMonitorTests(unittest.TestCase):
         self.assertFalse(monitor.monitor_has_ended(before))
         self.assertTrue(monitor.monitor_has_ended(at_stop))
 
+    def test_quiet_hours_use_actual_china_execution_time(self):
+        zone = ZoneInfo("Asia/Shanghai")
+        self.assertTrue(monitor.is_quiet_hours(datetime(2026, 8, 31, 0, 44, tzinfo=zone)))
+        self.assertTrue(monitor.is_quiet_hours(datetime(2026, 8, 31, 5, 59, tzinfo=zone)))
+        self.assertFalse(monitor.is_quiet_hours(datetime(2026, 8, 31, 6, 0, tzinfo=zone)))
+        self.assertFalse(monitor.is_quiet_hours(datetime(2026, 8, 31, 23, 59, tzinfo=zone)))
+
     def test_step_summary_is_written_when_path_exists(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "summary.md"
             with patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": str(path)}):
                 monitor.append_step_summary("hello\n")
             self.assertEqual("hello\n", path.read_text(encoding="utf-8"))
+
+    def test_preferred_honmachi_2_is_highlighted_before_other_vacancies(self):
+        results = {
+            "00356": monitor.HotelResult("00356", monitor.Status.AVAILABLE, 19350, False),
+            "00266": monitor.HotelResult("00266", monitor.Status.AVAILABLE, 18000, False),
+        }
+        smoking = {
+            code: monitor.HotelResult(code, monitor.Status.AVAILABLE, result.lowest_price, False)
+            for code, result in results.items()
+        }
+
+        ordered = monitor.available_results_in_priority_order(results)
+        self.assertEqual(["00266", "00356"], [result.code for result in ordered])
+
+        alert = monitor.build_alert_message(
+            results,
+            smoking,
+            datetime(2026, 8, 31, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+        self.assertIn("🌟 朋友同店·最高优先", alert)
+        self.assertIn("大阪本町2号店有房，和朋友住同一家最方便", alert)
+        self.assertLess(alert.index("大阪本町2号店"), alert.index("大阪巨蛋前"))
+
+    def test_other_vacancies_still_notify_when_preferred_hotel_is_full(self):
+        results = {
+            "00266": monitor.HotelResult("00266", monitor.Status.UNAVAILABLE, 0, False),
+            "00356": monitor.HotelResult("00356", monitor.Status.AVAILABLE, 19350, False),
+        }
+        alert = monitor.build_alert_message(
+            results,
+            {},
+            datetime(2026, 8, 31, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+        self.assertNotIn("朋友同店·最高优先", alert)
+        self.assertIn("大阪巨蛋前", alert)
 
 
 if __name__ == "__main__":
