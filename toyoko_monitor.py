@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -32,54 +33,55 @@ PEOPLE = 1
 ROOMS = 1
 REQUEST_TIMEOUT = (8, 25)
 DEFAULT_CONFIRM_DELAY_SECONDS = 8.0
+MAX_TOTAL_PRICE = 16000
 ISSUE_TITLE = "东横 INN 大阪空房监控通知（请订阅）"
 PREFERRED_HOTEL_CODE = "00266"
 PREFERRED_HOTEL_LABEL = "🌟 朋友同店·最高优先"
 
-# Order and 10 + 10 + 10 + 3 batching are taken from the supplied Safari HAR.
+# Each batch is a subset of one batch observed in the supplied Safari HAR. Keeping
+# those boundaries avoids inventing a new API request shape while reducing the
+# monitored inventory from all 33 Osaka hotels to the 14 user-approved choices.
 HOTEL_BATCHES = [
-    ["00366", "00071", "00363", "00237", "00091", "00016", "00200", "00240", "00266", "00033"],
-    ["00129", "00287", "00298", "00309", "00320", "00356", "00150", "00223", "00276", "00247"],
-    ["00254", "00131", "00154", "00252", "00054", "00300", "00047", "00039", "00023", "00034"],
-    ["00349", "00351", "00241"],
+    ["00071", "00091", "00016", "00266", "00033"],
+    ["00129", "00309", "00150", "00223", "00276"],
+    ["00131", "00300", "00047", "00034"],
 ]
 
 # Names are extracted from the public search-page response in the supplied HAR.
 HOTEL_NAMES = {
     "00016": "东横INN 新大阪中央口本馆",
-    "00023": "东横INN 大阪心斋桥西",
     "00033": "东横INN 大阪天满桥大手前",
     "00034": "东横INN 大阪梅田中津1号店",
-    "00039": "东横INN 大阪船场东",
     "00047": "东横INN 大阪本町1号店",
-    "00054": "东横INN 大阪难波西",
     "00071": "东横INN 大阪堺东站",
     "00091": "东横INN 新大阪中央口新馆",
     "00129": "东横INN 大阪梅田东",
     "00131": "东横INN 大阪淀屋桥站南",
     "00150": "东横INN 大阪谷四交差点",
-    "00154": "东横INN 大阪阪急十三站西口1号店",
-    "00200": "东横INN 大阪JR野田站前",
     "00223": "东横INN 大阪梅田中津2号店",
-    "00237": "东横INN 大阪鹤桥站前",
-    "00240": "东横INN 新大阪站东口",
-    "00241": "东横INN 大阪伊丹机场",
-    "00247": "东横INN 大阪阿倍野天王寺",
-    "00252": "东横INN 大阪通天阁前",
-    "00254": "东横INN 大阪难波日本桥",
     "00266": "东横INN 大阪本町2号店",
     "00276": "东横INN 新大阪东三国站前",
-    "00287": "东横INN 大阪日本桥文乐剧场前",
-    "00298": "东横INN 大阪京桥樱之宫",
     "00300": "东横INN 大阪阪急十三站西口2号店",
     "00309": "东横INN 大阪天神桥筋六丁目",
-    "00320": "东横INN 大阪门真市站前",
-    "00349": "东横INN 大阪弁天町",
-    "00351": "东横INN 大阪难波",
-    "00356": "东横INN 大阪巨蛋前",
-    "00363": "东横INN 东大阪",
-    "00366": "东横INN 大阪堺站前",
 }
+
+# Notification order reflects the agreed trip priorities, not API response order.
+HOTEL_PRIORITY = [
+    "00266",  # Same hotel as the friend; absolute first choice.
+    "00047",  # Closest practical alternative to Honmachi 2.
+    "00131",
+    "00150",
+    "00033",
+    "00034",
+    "00223",
+    "00129",
+    "00309",
+    "00300",
+    "00016",
+    "00091",
+    "00276",
+    "00071",  # User has stayed here and specifically likes it.
+]
 
 
 class Status(str, Enum):
@@ -168,6 +170,8 @@ def parse_hotel_result(code: str, raw: Any) -> HotelResult:
         return HotelResult(code, Status.UNKNOWN, reason="缺少或无法识别维护字段")
     if not isinstance(lowest_price, (int, float)) or isinstance(lowest_price, bool):
         return HotelResult(code, Status.UNKNOWN, reason="缺少或无法识别最低价格")
+    if available and (not math.isfinite(lowest_price) or lowest_price <= 0):
+        return HotelResult(code, Status.UNKNOWN, reason="有房但最低价格无效")
     if maintenance:
         return HotelResult(
             code,
@@ -246,7 +250,7 @@ def confirm_candidates(
     final = dict(initial)
     smoking_results: dict[str, HotelResult] = {}
     candidate_codes = {
-        code for code, result in initial.items() if result.status is Status.AVAILABLE
+        code for code, result in initial.items() if is_within_budget(result)
     }
     affected_batches = [batch for batch in HOTEL_BATCHES if candidate_codes.intersection(batch)]
     if not affected_batches:
@@ -303,6 +307,16 @@ def format_price(price: int | float | None) -> str:
     return f"¥{price:,.0f}"
 
 
+def is_within_budget(result: HotelResult) -> bool:
+    """Whether an available result is actionable under the two-night budget."""
+    return (
+        result.status is Status.AVAILABLE
+        and isinstance(result.lowest_price, (int, float))
+        and not isinstance(result.lowest_price, bool)
+        and 0 < result.lowest_price <= MAX_TOTAL_PRICE
+    )
+
+
 def smoking_description(code: str, smoking_results: dict[str, HotelResult]) -> str:
     result = smoking_results.get(code)
     if result is None or result.status is Status.UNKNOWN:
@@ -315,17 +329,38 @@ def smoking_description(code: str, smoking_results: dict[str, HotelResult]) -> s
 def available_results_in_priority_order(
     results: dict[str, HotelResult],
 ) -> list[HotelResult]:
-    """Put the friend's hotel first while preserving the HAR order for all others."""
+    """Return all raw vacancies in the agreed trip-priority order."""
     available_by_code = {
         code: result
         for code, result in results.items()
         if result.status is Status.AVAILABLE
     }
-    ordered_codes = [PREFERRED_HOTEL_CODE, *all_hotel_codes()]
     return [
         available_by_code.pop(code)
-        for code in ordered_codes
+        for code in HOTEL_PRIORITY
         if code in available_by_code
+    ]
+
+
+def notifiable_results_in_priority_order(
+    results: dict[str, HotelResult],
+) -> list[HotelResult]:
+    """Return only vacancies at or below the agreed total-stay price cap."""
+    return [
+        result
+        for result in available_results_in_priority_order(results)
+        if is_within_budget(result)
+    ]
+
+
+def over_budget_results_in_priority_order(
+    results: dict[str, HotelResult],
+) -> list[HotelResult]:
+    """Return valid vacancies that must remain log-only because of price."""
+    return [
+        result
+        for result in available_results_in_priority_order(results)
+        if not is_within_budget(result)
     ]
 
 
@@ -351,8 +386,13 @@ def print_results(
     for code in all_hotel_codes():
         result = results[code]
         suffix = ""
-        if result.status is Status.AVAILABLE:
+        if is_within_budget(result):
             suffix = f" | {smoking_description(code, smoking_results)} | {format_price(result.lowest_price)}"
+        elif result.status is Status.AVAILABLE:
+            suffix = (
+                f" | OVER_BUDGET (limit {format_price(MAX_TOTAL_PRICE)}); "
+                f"notification suppressed | {format_price(result.lowest_price)}"
+            )
         elif result.status is Status.UNKNOWN:
             suffix = f" | {result.reason or '未知错误'}"
         print(f"{code} {HOTEL_NAMES[code]:<30} {result.status.value}{suffix}")
@@ -363,7 +403,8 @@ def build_summary(
     smoking_results: dict[str, HotelResult],
     now_shanghai: datetime,
 ) -> str:
-    available = available_results_in_priority_order(results)
+    available = notifiable_results_in_priority_order(results)
+    over_budget = over_budget_results_in_priority_order(results)
     unavailable = [result for result in results.values() if result.status is Status.UNAVAILABLE]
     unknown = [result for result in results.values() if result.status is Status.UNKNOWN]
 
@@ -374,7 +415,8 @@ def build_summary(
         f"- 入住：{CHECKIN_DATE}",
         f"- 退房：{CHECKOUT_DATE}",
         f"- 酒店：{len(results)} 家",
-        f"- 有房：{len(available)}",
+        f"- 预算内有房（≤ {format_price(MAX_TOTAL_PRICE)}）：{len(available)}",
+        f"- 超预算有房：{len(over_budget)}",
         f"- 满房：{len(unavailable)}",
         f"- 未知：{len(unknown)}",
         "",
@@ -401,8 +443,17 @@ def build_summary(
             for result in other_available:
                 lines.append(format_available_line(result, smoking_results))
         lines.extend(["", f"[打开东横 INN 预订页面]({BOOKING_URL})", ""])
+    elif over_budget and not unknown:
+        lines.extend(
+            [
+                "## 结果：仅发现超预算空房，本次不通知",
+                "",
+                f"> 两晚最低价必须不高于 {format_price(MAX_TOTAL_PRICE)}。",
+                "",
+            ]
+        )
     elif not unknown:
-        lines.extend(["## 结果：目前大阪府 33 家全部满房", ""])
+        lines.extend([f"## 结果：目前监控的 {len(results)} 家全部满房", ""])
 
     if unknown:
         lines.extend(
@@ -421,7 +472,7 @@ def build_summary(
 
     lines.extend(
         [
-            "## 33 家明细",
+            f"## {len(results)} 家明细",
             "",
             "| 酒店代码 | 酒店 | 状态 | 最低价 | 说明 |",
             "|---|---|---|---:|---|",
@@ -429,13 +480,17 @@ def build_summary(
     )
     for code in all_hotel_codes():
         result = results[code]
-        note = (
-            smoking_description(code, smoking_results)
-            if result.status is Status.AVAILABLE
-            else (result.reason or "")
-        )
+        if is_within_budget(result):
+            status = result.status.value
+            note = smoking_description(code, smoking_results)
+        elif result.status is Status.AVAILABLE:
+            status = "AVAILABLE_OVER_BUDGET"
+            note = f"超过两晚预算 {format_price(MAX_TOTAL_PRICE)}；不通知"
+        else:
+            status = result.status.value
+            note = result.reason or ""
         lines.append(
-            f"| `{code}` | {HOTEL_NAMES[code]} | {result.status.value} | "
+            f"| `{code}` | {HOTEL_NAMES[code]} | {status} | "
             f"{format_price(result.lowest_price)} | {note} |"
         )
     return "\n".join(lines) + "\n"
@@ -537,7 +592,7 @@ def build_alert_message(
     smoking_results: dict[str, HotelResult],
     now_shanghai: datetime,
 ) -> str:
-    available = available_results_in_priority_order(results)
+    available = notifiable_results_in_priority_order(results)
     unknown = [result for result in results.values() if result.status is Status.UNKNOWN]
     lines = [
         f"查询时间：{now_shanghai:%Y-%m-%d %H:%M:%S}（中国时间）  ",
@@ -627,7 +682,8 @@ def main() -> int:
     summary = build_summary(results, smoking_results, now_shanghai)
     append_step_summary(summary)
 
-    available = any(result.status is Status.AVAILABLE for result in results.values())
+    available = bool(notifiable_results_in_priority_order(results))
+    over_budget = bool(over_budget_results_in_priority_order(results))
     unknown = any(result.status is Status.UNKNOWN for result in results.values())
     if available or unknown:
         alert = build_alert_message(results, smoking_results, now_shanghai)
@@ -639,8 +695,16 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+    elif over_budget:
+        print(
+            f"Only over-budget vacancies were found (limit: {format_price(MAX_TOTAL_PRICE)}). "
+            "No notification sent."
+        )
     else:
-        print("All 33 hotels are currently unavailable. No notification sent.")
+        print(
+            f"All {len(all_hotel_codes())} monitored hotels are currently unavailable. "
+            "No notification sent."
+        )
 
     return 1 if unknown else 0
 

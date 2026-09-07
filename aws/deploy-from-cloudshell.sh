@@ -14,7 +14,8 @@ fi
 NOTIFICATION_EMAIL="$1"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 ARTIFACT_BUCKET="toyoko-monitor-artifacts-${ACCOUNT_ID}-${AWS_REGION}"
-ARTIFACT_KEY="deployments/toyoko-lambda.zip"
+PACKAGE_SHA256="$(sha256sum "${PACKAGE_FILE}" | awk '{print $1}')"
+ARTIFACT_KEY="deployments/toyoko-lambda-${PACKAGE_SHA256}.zip"
 
 if ! aws s3api head-bucket --bucket "${ARTIFACT_BUCKET}" 2>/dev/null; then
   aws s3api create-bucket \
@@ -46,5 +47,5 @@ aws lambda invoke \
 
 echo
 echo "Deployment and first test invocation completed."
-echo "Open the AWS SNS confirmation email and click Confirm subscription."
+echo "On the first deployment only, open the AWS SNS email and confirm the subscription."
 cat response.json

@@ -47,7 +47,7 @@ class LambdaHandlerTests(unittest.TestCase):
         mocked_datetime.now.return_value = now
         inventory = full_inventory()
         inventory["00266"] = monitor.HotelResult(
-            "00266", monitor.Status.AVAILABLE, 18000, False
+            "00266", monitor.Status.AVAILABLE, 16000, False
         )
         fetch_all.return_value = inventory
         confirm_candidates.return_value = (inventory, {})
@@ -65,14 +65,38 @@ class LambdaHandlerTests(unittest.TestCase):
     @patch.object(monitor, "confirm_candidates")
     @patch.object(monitor, "fetch_all")
     @patch.object(monitor, "build_session")
+    def test_over_budget_vacancy_only_logs_without_email(
+        self, build_session, fetch_all, confirm_candidates, publish, mocked_datetime
+    ):
+        now = datetime(2026, 8, 31, 12, 0, tzinfo=ZoneInfo("Asia/Tokyo"))
+        mocked_datetime.now.return_value = now
+        inventory = full_inventory()
+        inventory["00266"] = monitor.HotelResult(
+            "00266", monitor.Status.AVAILABLE, 16001, False
+        )
+        fetch_all.return_value = inventory
+        confirm_candidates.return_value = (inventory, {})
+
+        result = aws_monitor.lambda_handler({}, Mock())
+
+        self.assertEqual("over_budget", result["status"])
+        self.assertEqual(1, result["over_budget"])
+        self.assertFalse(result["notified"])
+        publish.assert_not_called()
+
+    @patch.object(aws_monitor, "datetime")
+    @patch.object(aws_monitor, "publish_notification")
+    @patch.object(monitor, "confirm_candidates")
+    @patch.object(monitor, "fetch_all")
+    @patch.object(monitor, "build_session")
     def test_unknown_sends_failure_email_without_raising_for_retry(
         self, build_session, fetch_all, confirm_candidates, publish, mocked_datetime
     ):
         now = datetime(2026, 8, 31, 12, 0, tzinfo=ZoneInfo("Asia/Tokyo"))
         mocked_datetime.now.return_value = now
         inventory = full_inventory()
-        inventory["00351"] = monitor.HotelResult(
-            "00351", monitor.Status.UNKNOWN, reason="API 请求超时"
+        inventory["00071"] = monitor.HotelResult(
+            "00071", monitor.Status.UNKNOWN, reason="API 请求超时"
         )
         fetch_all.return_value = inventory
         confirm_candidates.return_value = (inventory, {})

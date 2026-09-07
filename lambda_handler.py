@@ -44,7 +44,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     )
     monitor.print_results(results, smoking_results)
 
-    available = monitor.available_results_in_priority_order(results)
+    available = monitor.notifiable_results_in_priority_order(results)
+    over_budget = monitor.over_budget_results_in_priority_order(results)
     unknown = [
         result for result in results.values() if result.status is monitor.Status.UNKNOWN
     ]
@@ -67,12 +68,25 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         message = monitor.build_alert_message(results, smoking_results, now_shanghai)
         publish_notification(subject, message)
         print(f"SNS notification published: {subject}")
+    elif over_budget:
+        print(
+            "Only over-budget vacancies were found "
+            f"(limit: {monitor.format_price(monitor.MAX_TOTAL_PRICE)}); no email was sent."
+        )
     else:
-        print("All 33 Osaka hotels are unavailable; no email was sent.")
+        print(
+            f"All {len(monitor.all_hotel_codes())} monitored hotels are unavailable; "
+            "no email was sent."
+        )
 
     payload = {
-        "status": "unknown" if unknown else ("available" if available else "full"),
+        "status": (
+            "unknown"
+            if unknown
+            else ("available" if available else ("over_budget" if over_budget else "full"))
+        ),
         "available": len(available),
+        "over_budget": len(over_budget),
         "unknown": len(unknown),
         "notified": notified,
     }
