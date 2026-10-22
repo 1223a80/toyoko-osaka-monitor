@@ -40,11 +40,11 @@ PREFERRED_HOTEL_LABEL = "🌟 朋友同店·最高优先"
 
 # Each batch is a subset of one batch observed in the supplied Safari HAR. Keeping
 # those boundaries avoids inventing a new API request shape while reducing the
-# monitored inventory from all 33 Osaka hotels to the 14 user-approved choices.
+# monitored inventory from all 33 Osaka hotels to the 15 user-approved choices.
 HOTEL_BATCHES = [
     ["00071", "00091", "00016", "00266", "00033"],
     ["00129", "00309", "00150", "00223", "00276"],
-    ["00131", "00300", "00047", "00034"],
+    ["00131", "00300", "00047", "00039", "00034"],
 ]
 
 # Names are extracted from the public search-page response in the supplied HAR.
@@ -52,6 +52,7 @@ HOTEL_NAMES = {
     "00016": "东横INN 新大阪中央口本馆",
     "00033": "东横INN 大阪天满桥大手前",
     "00034": "东横INN 大阪梅田中津1号店",
+    "00039": "东横INN 大阪船场东",
     "00047": "东横INN 大阪本町1号店",
     "00071": "东横INN 大阪堺东站",
     "00091": "东横INN 新大阪中央口新馆",
@@ -69,6 +70,7 @@ HOTEL_NAMES = {
 HOTEL_PRIORITY = [
     "00266",  # Same hotel as the friend; absolute first choice.
     "00047",  # Closest practical alternative to Honmachi 2.
+    "00039",  # Senba East; restored to the monitored shortlist.
     "00131",
     "00150",
     "00033",

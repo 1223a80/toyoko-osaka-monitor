@@ -19,14 +19,18 @@ def raw_result(available=False, price=0, maintenance=False):
 
 
 class ToyokoMonitorTests(unittest.TestCase):
-    def test_hotel_inventory_is_exactly_14_user_approved_unique_codes(self):
+    def test_hotel_inventory_is_exactly_15_user_approved_unique_codes(self):
         codes = monitor.all_hotel_codes()
-        self.assertEqual(14, len(codes))
-        self.assertEqual(14, len(set(codes)))
+        self.assertEqual(15, len(codes))
+        self.assertEqual(15, len(set(codes)))
         self.assertEqual(set(codes), set(monitor.HOTEL_NAMES))
         self.assertEqual(set(codes), set(monitor.HOTEL_PRIORITY))
-        self.assertEqual([5, 5, 4], [len(batch) for batch in monitor.HOTEL_BATCHES])
-        self.assertNotIn("00039", codes)  # Senba East is already booked.
+        self.assertEqual([5, 5, 5], [len(batch) for batch in monitor.HOTEL_BATCHES])
+        self.assertIn("00039", codes)  # Senba East was explicitly restored.
+        self.assertLess(
+            monitor.HOTEL_PRIORITY.index("00039"),
+            monitor.HOTEL_PRIORITY.index("00131"),
+        )
         self.assertNotIn("00351", codes)  # Namba tourist area is excluded.
 
     def test_build_input_preserves_japan_midnight_utc_serialization(self):
